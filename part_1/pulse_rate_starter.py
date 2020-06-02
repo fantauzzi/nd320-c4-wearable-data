@@ -1,6 +1,19 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+from matplotlib import pyplot as plt
+
+plt.ion()
+from matplotlib import get_backend
+import glob
+import numpy as np
+import scipy as sp
+import scipy.io
+import scipy.signal
+# from scipy import signal
+from scipy.stats import describe
+
+
 # ## Part 1: Pulse Rate Algorithm
 # 
 # ### Contents
@@ -27,14 +40,7 @@
 # In[ ]:
 
 
-import glob
-
-import numpy as np
-import scipy as sp
-import scipy.io
-
-
-def LoadTroikaDataset():
+def load_troika_dataset():
     """
     Retrieve the .mat filenames for the troika dataset.
 
@@ -51,7 +57,8 @@ def LoadTroikaDataset():
     ref_fls = sorted(glob.glob(data_dir + "/REF_*.mat"))
     return data_fls, ref_fls
 
-def LoadTroikaDataFile(data_fl):
+
+def load_troika_data_file(data_fl):
     """
     Loads and extracts signals from a troika data file.
 
@@ -69,7 +76,13 @@ def LoadTroikaDataFile(data_fl):
     return data[2:]
 
 
-def AggregateErrorMetric(pr_errors, confidence_est):
+def load_troika_ground_truth(ref_fl):
+    data = sp.io.loadmat(ref_fl)['BPM0']
+    data = np.squeeze(data)
+    return data
+
+
+def aggregate_error_metric(pr_errors, confidence_est):
     """
     Computes an aggregate error metric based on confidence estimates.
 
@@ -94,7 +107,8 @@ def AggregateErrorMetric(pr_errors, confidence_est):
     # Return the mean absolute error
     return np.mean(np.abs(best_estimates))
 
-def Evaluate():
+
+def evaluate():
     """
     Top-level function evaluation function.
 
@@ -104,21 +118,22 @@ def Evaluate():
         Pulse rate error on the Troika dataset. See AggregateErrorMetric.
     """
     # Retrieve dataset files
-    data_fls, ref_fls = LoadTroikaDataset()
+    data_fls, ref_fls = load_troika_dataset()
     errs, confs = [], []
     for data_fl, ref_fl in zip(data_fls, ref_fls):
         # Run the pulse rate algorithm on each trial in the dataset
-        errors, confidence = RunPulseRateAlgorithm(data_fl, ref_fl)
+        errors, confidence = run_pulse_rate_algorithm(data_fl, ref_fl)
         errs.append(errors)
         confs.append(confidence)
         # Compute aggregate error metric
     errs = np.hstack(errs)
     confs = np.hstack(confs)
-    return AggregateErrorMetric(errs, confs)
+    return aggregate_error_metric(errs, confs)
 
-def RunPulseRateAlgorithm(data_fl, ref_fl):
+
+def run_pulse_rate_algorithm(data_fl, ref_fl):
     # Load data using LoadTroikaDataFile
-    ppg, accx, accy, accz = LoadTroikaDataFile(data_fl)
+    ppg, accx, accy, accz = load_troika_data_file(data_fl)
 
     # Compute pulse rate estimates and estimation confidence.
 
@@ -147,3 +162,97 @@ def RunPulseRateAlgorithm(data_fl, ref_fl):
 # -----
 # ### Next Steps
 # You will now go to **Test Your Algorithm** (back in the Project Classroom) to apply a unit test to confirm that your algorithm met the success criteria. 
+
+
+def BandpassFilter(the_signal, pass_band, fs):
+    b, a = sp.signal.butter(5, pass_band, btype='bandpass', fs=fs)
+    res = sp.signal.filtfilt(b, a, the_signal)
+    return res
+
+
+def get_time_scale(data, freq):
+    res = np.linspace(start=0, stop=len(data) / freq / 60, num=len(data), endpoint=True)
+    return res
+
+
+def clear_axis(axis):
+    for ax in axis:
+        ax.clear()
+
+
+def main():
+    print('Using backend', get_backend())
+    fs = 125  # Sampling frequency, Hz
+    fgt = .5  # Ground truth sample frequency, Hz
+    data_fls, ref_fls = load_troika_dataset()
+    assert len(data_fls) == len(ref_fls)
+    n_runs = len(data_fls)
+    accel = []
+    ppg = []
+    gt = []
+    for data_fl, ref_fl in zip(data_fls, ref_fls):
+        data = load_troika_data_file(data_fl)
+        gt_data = load_troika_ground_truth(ref_fl)
+        accel.append(data[1:4])
+        ppg.append(data[0])
+        gt.append(gt_data)
+
+    all_accel_magnitude = np.empty((0,), dtype=float)
+    all_ppg = np.empty((0,), dtype=float)
+    fig, ax = plt.subplots(3, 1)
+    for accel_run, ppg_run, gt_run in zip(accel, ppg, gt):
+        magnitude = np.sqrt(accel_run[0] ** 2 + accel_run[1] ** 2 + accel_run[2] ** 2)
+        all_accel_magnitude = np.concatenate((all_accel_magnitude, magnitude))
+        all_ppg = np.concatenate((all_ppg, ppg_run))
+        ts_data = get_time_scale(ppg_run, fs)
+        ts_gt = get_time_scale(gt_run, fgt)
+        colors = ('orange', 'blue', 'purple')
+        for i in range(3):
+            ax[0].plot(ts_data, accel_run[i], color=colors[i])
+        ax[1].plot(ts_data, ppg_run, color='green')
+        ax[2].plot(ts_gt, gt_run, color='red')
+        plt.waitforbuttonpress(timeout=0)
+        clear_axis(ax)
+
+    plt.close(fig)
+
+    print('Stats for IMU acc. magnitude', describe(all_accel_magnitude))
+    print('Stats for PPG', describe(all_ppg))
+
+    # Hystogram for IMU acc. magnitude and for PPG value
+    fig, ax = plt.subplots(1, 2)
+    ax[0].hist(all_accel_magnitude, bins=20, log=True)
+    ax[0].set_title('Histogram of accel. magnitude')
+    ax[1].hist(all_ppg, bins=20, log=True)
+    ax[1].set_title('Histogram of PPG data')
+    plt.waitforbuttonpress(timeout=0)
+    plt.close(fig)
+
+    ''' It looks like PPG data are clipped to their min and max value; also, the max value is probably replacement 
+    for no value available (for instance when the PPG temporarily lost contact with the skin). '''
+    print(all_ppg[all_ppg == max(all_ppg)].sum())
+    print(all_ppg[all_ppg == min(all_ppg)].sum())
+
+    fig, ax = plt.subplots(4, 1)
+    for accel_run, ppg_run, gt_run in zip(accel, ppg, gt):
+        ppg_run_filt = BandpassFilter(ppg_run, (40 / 60, 240 / 60), fs)
+        fft = np.fft.rfft(ppg_run_filt)
+        freq = np.fft.rfftfreq(len(ppg_run_filt), 1 / fs)
+        ppg_run_ts = get_time_scale(ppg_run, fs)
+        gt_run_ts = get_time_scale(gt_run, fgt)
+        t = len(ppg_run) / fs
+        ax[0].plot(ppg_run_ts, ppg_run, color='green')
+        ax[1].plot(freq, np.abs(fft), color='green')
+        ax[2].specgram(ppg_run_filt, Fs=fs, NFFT=1 * fs, noverlap=0, xextent=((0, t)))
+        gt_run_ts2 = np.linspace(start=0, stop=len(gt_run) / fgt, num=len(gt_run), endpoint=True)
+        ax[2].plot(gt_run_ts2, gt_run / 60, '.', color='red')
+        ax[2].set_ylim((0, 4))
+        ax[3].plot(gt_run_ts, gt_run / 60, color='red')
+        plt.waitforbuttonpress(timeout=0)
+        clear_axis(ax)
+        
+    plt.close(fig)
+
+
+if __name__ == '__main__':
+    main()
