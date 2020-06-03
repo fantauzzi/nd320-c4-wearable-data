@@ -5,6 +5,8 @@ from matplotlib import pyplot as plt
 
 plt.ion()
 from matplotlib import get_backend
+from matplotlib.widgets import Slider
+from matplotlib.gridspec import GridSpec
 import glob
 import numpy as np
 import scipy as sp
@@ -164,8 +166,9 @@ def run_pulse_rate_algorithm(data_fl, ref_fl):
 # You will now go to **Test Your Algorithm** (back in the Project Classroom) to apply a unit test to confirm that your algorithm met the success criteria. 
 
 
-def BandpassFilter(the_signal, pass_band, fs):
-    b, a = sp.signal.butter(5, pass_band, btype='bandpass', fs=fs)
+def bandpass_filter(the_signal, pass_band, fs):
+    # noinspection PyTupleAssignmentBalance
+    b, a = sp.signal.butter(5, pass_band, btype='bandpass', fs=fs)  # TODO try with order != 5
     res = sp.signal.filtfilt(b, a, the_signal)
     return res
 
@@ -180,38 +183,112 @@ def clear_axis(axis):
         ax.clear()
 
 
+def wait_for_key():
+    while not plt.waitforbuttonpress(timeout=0):
+        ...
+
+
+def plot_windowed_fft(ax, color, data, window_start, window_size, frequency):
+    fft = np.fft.rfft(data[window_start:window_start + window_size], n=len(data))
+    freq = np.fft.rfftfreq(len(data), 1 / frequency)
+    ax.plot(freq, np.abs(fft), color=color)
+
+
 def main():
     print('Using backend', get_backend())
     fs = 125  # Sampling frequency, Hz
     fgt = .5  # Ground truth sample frequency, Hz
     data_fls, ref_fls = load_troika_dataset()
     assert len(data_fls) == len(ref_fls)
-    n_runs = len(data_fls)
-    accel = []
-    ppg = []
-    gt = []
+    runs = []
     for data_fl, ref_fl in zip(data_fls, ref_fls):
         data = load_troika_data_file(data_fl)
         gt_data = load_troika_ground_truth(ref_fl)
-        accel.append(data[1:4])
-        ppg.append(data[0])
-        gt.append(gt_data)
+        run = {'ppg': data[0], 'imu': data[1:4], 'gt': gt_data}
+        runs.append(run)
 
+    for run in runs:
+        run['ppg_filtered'] = bandpass_filter(run['ppg'], (40 / 60, 240 / 60), fs)
+        run['imu_filtered'] = np.empty_like(run['imu'])
+        for i in range(3):
+            run['imu_filtered'][i] = bandpass_filter(run['imu'][i], (40 / 60, 240 / 60), fs)
+        run['imu_magnitude'] = np.sqrt(
+            (run['imu_filtered'][0] ** 2 + run['imu_filtered'][1] ** 2 + run['imu_filtered'][2] ** 2))
+
+    fig, ax = plt.subplots(7, 1)
+    for run in runs:
+        t = len(run['ppg']) / fs
+        # Plot the 3 IMU axes
+        colors = ('orange', 'blue', 'purple')
+        ts_imu = get_time_scale(run['imu_magnitude'], fs)
+        for i in range(3):
+            ax[0].plot(ts_imu, run['imu'][i], color=colors[i])
+        ts_ppg = get_time_scale(run['ppg_filtered'], fs)
+        ax[1].plot(ts_ppg, run['ppg_filtered'], color='green')
+        # Plot FT of filtered IMU magnitude
+        for i in range(3):
+            plot_windowed_fft(ax=ax[2+i],
+                              color=colors[i],
+                              data=run['imu_filtered'][i],
+                              window_start=0,
+                              window_size=8 * fs,
+                              frequency=fs)
+        # Plot FT of filtered PPG
+        plot_windowed_fft(ax=ax[5],
+                          color='lime',
+                          data=run['ppg_filtered'],
+                          window_start=0,
+                          window_size=8*fs,
+                          frequency=fs)
+        # slider_ax = plt.axes([0.25, 0.1, 0.65, 0.03], facecolor='green')
+        slider = Slider(ax=ax[-1], label='Time', valmin=0, valmax=t-8, valinit=0, valstep=1)
+
+        def update(value):
+            print(value)
+            ax[5].clear()
+            plot_windowed_fft(ax=ax[5],
+                              color='lime',
+                              data=run['ppg_filtered'],
+                              window_start=int(value)*fs,
+                              window_size=8*fs,
+                              frequency=fs)
+            # l.set_ydata(amp * np.sin(2 * np.pi * freq * t))
+            for i in range(3):
+                ax[2+i].clear()
+                plot_windowed_fft(ax=ax[2 + i],
+                                  color=colors[i],
+                                  data=run['imu_filtered'][i],
+                                  window_start=int(value)*fs,
+                                  window_size=8 * fs,
+                                  frequency=fs)
+
+            fig.canvas.draw_idle()
+
+        slider.on_changed(update)
+        wait_for_key()
+        clear_axis(ax)
+
+    plt.close(fig)
+
+    # Stitch accel. magnitude and PPG data across runs to easily compute their stats later on
     all_accel_magnitude = np.empty((0,), dtype=float)
     all_ppg = np.empty((0,), dtype=float)
+
     fig, ax = plt.subplots(3, 1)
-    for accel_run, ppg_run, gt_run in zip(accel, ppg, gt):
-        magnitude = np.sqrt(accel_run[0] ** 2 + accel_run[1] ** 2 + accel_run[2] ** 2)
-        all_accel_magnitude = np.concatenate((all_accel_magnitude, magnitude))
-        all_ppg = np.concatenate((all_ppg, ppg_run))
-        ts_data = get_time_scale(ppg_run, fs)
-        ts_gt = get_time_scale(gt_run, fgt)
+    for run in runs:
+        # Plot the three axes of the IMU
+        all_accel_magnitude = np.concatenate((all_accel_magnitude, run['imu_magnitude']))
+        all_ppg = np.concatenate((all_ppg, run['ppg']))
+        ts_data = get_time_scale(run['ppg'], fs)
+        ts_gt = get_time_scale(run['gt'], fgt)
         colors = ('orange', 'blue', 'purple')
         for i in range(3):
-            ax[0].plot(ts_data, accel_run[i], color=colors[i])
-        ax[1].plot(ts_data, ppg_run, color='green')
-        ax[2].plot(ts_gt, gt_run, color='red')
-        plt.waitforbuttonpress(timeout=0)
+            ax[0].plot(ts_data, run['imu'][i], color=colors[i])
+        # Plot PPG
+        ax[1].plot(ts_data, run['ppg'], color='green')
+        # Plot ground truth (HR)
+        ax[2].plot(ts_gt, run['gt'], color='red')
+        wait_for_key()
         clear_axis(ax)
 
     plt.close(fig)
@@ -225,7 +302,7 @@ def main():
     ax[0].set_title('Histogram of accel. magnitude')
     ax[1].hist(all_ppg, bins=20, log=True)
     ax[1].set_title('Histogram of PPG data')
-    plt.waitforbuttonpress(timeout=0)
+    wait_for_key()
     plt.close(fig)
 
     ''' It looks like PPG data are clipped to their min and max value; also, the max value is probably replacement 
@@ -234,23 +311,39 @@ def main():
     print(all_ppg[all_ppg == min(all_ppg)].sum())
 
     fig, ax = plt.subplots(4, 1)
-    for accel_run, ppg_run, gt_run in zip(accel, ppg, gt):
-        ppg_run_filt = BandpassFilter(ppg_run, (40 / 60, 240 / 60), fs)
+    for run in runs:
+        gt_run_ts = get_time_scale(run['gt'], fgt)
+        # Plot filtered vs. non filtered PPG sensor values
+        ppg_run_filt = bandpass_filter(run['ppg'], (40 / 60, 240 / 60), fs)
+        ppg_run_ts = get_time_scale(run['ppg'], fs)
+        ax[0].plot(ppg_run_ts, ppg_run_filt, color='green')
+        ax[0].plot(ppg_run_ts, run['ppg'], color='lime')
+
+        # Plot FT of filtered PPG
         fft = np.fft.rfft(ppg_run_filt)
         freq = np.fft.rfftfreq(len(ppg_run_filt), 1 / fs)
-        ppg_run_ts = get_time_scale(ppg_run, fs)
-        gt_run_ts = get_time_scale(gt_run, fgt)
-        t = len(ppg_run) / fs
-        ax[0].plot(ppg_run_ts, ppg_run, color='green')
         ax[1].plot(freq, np.abs(fft), color='green')
-        ax[2].specgram(ppg_run_filt, Fs=fs, NFFT=1 * fs, noverlap=0, xextent=((0, t)))
-        gt_run_ts2 = np.linspace(start=0, stop=len(gt_run) / fgt, num=len(gt_run), endpoint=True)
-        ax[2].plot(gt_run_ts2, gt_run / 60, '.', color='red')
-        ax[2].set_ylim((0, 4))
-        ax[3].plot(gt_run_ts, gt_run / 60, color='red')
-        plt.waitforbuttonpress(timeout=0)
+
+        # Plot HR against a spectrogram of the filtered PPG signal
+        # Using an 8 sec window with 6 sec overlap because it is what adopted by the HR ground truth
+        t = len(run['ppg']) / fs
+        ax[2].specgram(ppg_run_filt, Fs=fs, NFFT=8 * fs, noverlap=6 * fs, xextent=((0, t)))
+        gt_run_ts2 = np.linspace(start=0, stop=len(run['gt']) / fgt, num=len(run['gt']), endpoint=True)
+        ax[2].plot(gt_run_ts2, run['gt'] / 60, '.', color='red')
+        ax[2].set_ylim((0, 5))
+
+        # Plot HR against a spectrogram of the acceleration magnitude
+        # Same window and overlap as above
+        acc_fft = np.fft.rfft(run['imu_magnitude'])
+        # acc_freq = np.fft.rfftfreq(len(accel_filt), 1 / fs)
+        ax[3].specgram(acc_fft, Fs=fs, NFFT=8 * fs, noverlap=6 * fs, xextent=((0, t)))
+        ax[3].plot(gt_run_ts2, run['gt'] / 60, '.', color='red')
+        ax[3].set_ylim((0, 5))
+
+        # ax[3].plot(gt_run_ts, gt_run / 60, color='red')
+        wait_for_key()
         clear_axis(ax)
-        
+
     plt.close(fig)
 
 
