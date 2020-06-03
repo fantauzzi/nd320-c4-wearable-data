@@ -215,55 +215,47 @@ def main():
         run['imu_magnitude'] = np.sqrt(
             (run['imu_filtered'][0] ** 2 + run['imu_filtered'][1] ** 2 + run['imu_filtered'][2] ** 2))
 
+    colors = ('orange', 'blue', 'purple')
+
+    def update(value):
+        gt_idx = int(value * fgt+4*fgt)
+        gt_value = run['gt'][gt_idx] / 60 if gt_idx < len(run['gt']) else None
+        ax[5].clear()
+        plot_windowed_fft(ax=ax[5],
+                          color='lime',
+                          data=run['ppg_filtered'],
+                          window_start=int(value) * fs,
+                          window_size=8 * fs,
+                          frequency=fs)
+        if gt_value is not None:
+            ax[5].axvline(x=gt_value, color='black', linestyle='dotted')
+        ax[5].set_xlim((0, 5))
+        for i in range(3):
+            ax[2 + i].clear()
+            plot_windowed_fft(ax=ax[2 + i],
+                              color=colors[i],
+                              data=run['imu_filtered'][i],
+                              window_start=int(value) * fs,
+                              window_size=8 * fs,
+                              frequency=fs)
+            if gt_value is not None:
+                ax[2 + i].axvline(x=gt_value, color='black', linestyle='dotted')
+            ax[2 + i].set_xlim((0, 5))
+        fig.canvas.draw_idle()
+
     fig, ax = plt.subplots(7, 1)
+
     for run in runs:
         t = len(run['ppg']) / fs
         # Plot the 3 IMU axes
-        colors = ('orange', 'blue', 'purple')
         ts_imu = get_time_scale(run['imu_magnitude'], fs)
         for i in range(3):
             ax[0].plot(ts_imu, run['imu'][i], color=colors[i])
         ts_ppg = get_time_scale(run['ppg_filtered'], fs)
         ax[1].plot(ts_ppg, run['ppg_filtered'], color='green')
         # Plot FT of filtered IMU magnitude
-        for i in range(3):
-            plot_windowed_fft(ax=ax[2+i],
-                              color=colors[i],
-                              data=run['imu_filtered'][i],
-                              window_start=0,
-                              window_size=8 * fs,
-                              frequency=fs)
-        # Plot FT of filtered PPG
-        plot_windowed_fft(ax=ax[5],
-                          color='lime',
-                          data=run['ppg_filtered'],
-                          window_start=0,
-                          window_size=8*fs,
-                          frequency=fs)
-        # slider_ax = plt.axes([0.25, 0.1, 0.65, 0.03], facecolor='green')
-        slider = Slider(ax=ax[-1], label='Time', valmin=0, valmax=t-8, valinit=0, valstep=1)
-
-        def update(value):
-            print(value)
-            ax[5].clear()
-            plot_windowed_fft(ax=ax[5],
-                              color='lime',
-                              data=run['ppg_filtered'],
-                              window_start=int(value)*fs,
-                              window_size=8*fs,
-                              frequency=fs)
-            # l.set_ydata(amp * np.sin(2 * np.pi * freq * t))
-            for i in range(3):
-                ax[2+i].clear()
-                plot_windowed_fft(ax=ax[2 + i],
-                                  color=colors[i],
-                                  data=run['imu_filtered'][i],
-                                  window_start=int(value)*fs,
-                                  window_size=8 * fs,
-                                  frequency=fs)
-
-            fig.canvas.draw_idle()
-
+        update(0)
+        slider = Slider(ax=ax[-1], label='Time', valmin=0, valmax=int(t - 8), valinit=0, valstep=1)
         slider.on_changed(update)
         wait_for_key()
         clear_axis(ax)
