@@ -217,8 +217,10 @@ def main():
 
     colors = ('orange', 'blue', 'purple')
 
+    fig, ax = plt.subplots(8, 1)
+
     def update(value):
-        gt_idx = int(value * fgt+4*fgt)
+        gt_idx = int(value * fgt)
         gt_value = run['gt'][gt_idx] / 60 if gt_idx < len(run['gt']) else None
         ax[5].clear()
         plot_windowed_fft(ax=ax[5],
@@ -230,6 +232,15 @@ def main():
         if gt_value is not None:
             ax[5].axvline(x=gt_value, color='black', linestyle='dotted')
         ax[5].set_xlim((0, 5))
+        # Plot ground truth (HR)
+        ax[6].clear()
+        ts_gt = get_time_scale(run['gt'], fgt)
+        ax[6].plot(ts_gt, run['gt'] / 60, '.', color='red')
+        t = len(run['ppg']) / fs
+        ax[6].set_xlim((0, t / 60))
+        if gt_value is not None:
+            ax[6].axhline(y=gt_value, color='black', linestyle='dotted')
+            ax[6].axvline(x=value / 60, color='black', linestyle='dotted')
         for i in range(3):
             ax[2 + i].clear()
             plot_windowed_fft(ax=ax[2 + i],
@@ -243,19 +254,21 @@ def main():
             ax[2 + i].set_xlim((0, 5))
         fig.canvas.draw_idle()
 
-    fig, ax = plt.subplots(7, 1)
-
     for run in runs:
         t = len(run['ppg']) / fs
         # Plot the 3 IMU axes
         ts_imu = get_time_scale(run['imu_magnitude'], fs)
         for i in range(3):
             ax[0].plot(ts_imu, run['imu'][i], color=colors[i])
+        ax[0].set_xlim((0,t/60))
         ts_ppg = get_time_scale(run['ppg_filtered'], fs)
         ax[1].plot(ts_ppg, run['ppg_filtered'], color='green')
+        ax[1].set_xlim((0, t / 60))
         # Plot FT of filtered IMU magnitude
         update(0)
-        slider = Slider(ax=ax[-1], label='Time', valmin=0, valmax=int(t - 8), valinit=0, valstep=1)
+        valmax = int(t - 8) if (int(t - 8) % 2) == 0 else int(t - 9)
+        slider = Slider(ax=ax[-1], label='Time', valmin=0, valmax=valmax, valinit=0, valstep=2)
+        ax[-1].set_xlim((0, t))
         slider.on_changed(update)
         wait_for_key()
         clear_axis(ax)
